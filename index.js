@@ -9,6 +9,19 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
 const port = process.env.PORT || 3000
 
+// generate tracking id
+const crypto = require('crypto');
+
+function generateTrackingId() {
+    const prefix = "PRCL"; // your brand prefix
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, ""); // YYYYMMDD
+    const random = crypto.randomBytes(3).toString("hex").toUpperCase(); // 6-char random
+
+    return `${prefix}-${date}-${random}`;
+}
+// test
+console.log(generateTrackingId());
+
 // middleware
 app.use(express.json());
 app.use(cors());
@@ -150,12 +163,15 @@ async function run() {
             const session = await stripe.checkout.sessions.retrieve(sessionId);
             console.log('session retrieve', session)
 
+            const trackingId = generateTrackingId();
+
             if (session.payment_status === 'paid') {
                 const id = session.metadata.parcelId;
                 const query = { _id: new ObjectId(id) };   // search kora id ta ke
                 const update = {
                     $set: {
                         paymentStatus: 'paid',
+                        trackingId: trackingId
                     }
                 }
 
@@ -169,13 +185,19 @@ async function run() {
                     parcelName: session.metadata.parcelName,
                     transactionId: session.payment_intent,
                     paymentStatus: session.payment_status,
-                    paidAt:new Date(),
-                    trackingId:''
+                    paidAt: new Date(),
                 }
 
                 if (session.payment_status === 'paid') {
                     const resultPayment = await paymentCollection.insertOne(payment);
-                    res.send({ success: true, modifyParcel: result, paymentInfo: resultPayment })
+
+                    res.send({
+                        success: true,
+                        modifyParcel: result,
+                        trackingId: trackingId,
+                        transactionId: session.payment_intent,
+                        paymentInfo: resultPayment
+                    })
                 }
             }
 
