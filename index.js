@@ -31,6 +31,7 @@ async function run() {
 
         const db = client.db('zap_shift_db');   // create database
         const parcelsCollection = db.collection('parcels');
+        const paymentCollection = db.collection('payments');
 
         // parcel  api
         // get parcel
@@ -79,17 +80,49 @@ async function run() {
         })
 
         // payment related apis
+        app.post('/payment-checkout-session', async (req, res) => {
+            const paymentInfo = req.body;
+            const amount = parseInt(paymentInfo.cost) * 100;
+            const session = await stripe.checkout.sessions.create({
+                line_items: [
+                    {
+                        price_data: {
+                            currency: 'USD',
+                            unit_amount: amount,
+                            product_data: {
+                                name: `Please pay for : ${paymentInfo.parcelName}`,
+                            }
+                        },
+                        quantity: 1,
+                    },
+                ],
+                mode: 'payment',
+                customer_email: paymentInfo.senderEmail,
+                metadata: {
+                    parcelId: paymentInfo.parcelId,
+                    parcelName: paymentInfo.parcelName
+                },
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
+            })
+
+            res.send({ url: session.url })
+        })
+
+        // old payment 
         app.post('/create-checkout-session', async (req, res) => {
             const paymentInfo = req.body;
+            const amount = parseInt(paymentInfo.cost) * 100;
+
             const session = await stripe.checkout.sessions.create({
                 line_items: [
                     {
                         // Provide the exact Price ID (for example, price_1234) of the product you want to sell
-                        price_data:{
-                            currency:'USD',
-                            unit_amount:1500,
-                            product_data:{
-                                name:paymentInfo.parcelName
+                        price_data: {
+                            currency: 'USD',
+                            unit_amount: amount,
+                            product_data: {
+                                name: paymentInfo.parcelName
                             }
                         },
                         quantity: 1,
@@ -97,8 +130,56 @@ async function run() {
                 ],
                 customer_email: paymentInfo.senderEmail,
                 mode: 'payment',
+                metadata: {
+                    parcelId: paymentInfo.parcelId,
+                    parcelName: paymentInfo.parcelName
+                },
                 success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
+                cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
             })
+
+            console.log(session);
+            res.send({ url: session.url });
+        })
+
+        // update or paid
+        app.patch('/payment-success', async (req, res) => {
+
+            const sessionId = req.query.session_id;
+
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+            console.log('session retrieve', session)
+
+            if (session.payment_status === 'paid') {
+                const id = session.metadata.parcelId;
+                const query = { _id: new ObjectId(id) };   // search kora id ta ke
+                const update = {
+                    $set: {
+                        paymentStatus: 'paid',
+                    }
+                }
+
+                const result = await parcelsCollection.updateOne(query, update);
+
+                const payment = {
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    customer_email: session.customer_email,
+                    parcelId: session.metadata.parcelId,
+                    parcelName: session.metadata.parcelName,
+                    transactionId: session.payment_intent,
+                    paymentStatus: session.payment_status,
+                    paidAt:new Date(),
+                    trackingId:''
+                }
+
+                if (session.payment_status === 'paid') {
+                    const resultPayment = await paymentCollection.insertOne(payment);
+                    res.send({ success: true, modifyParcel: result, paymentInfo: resultPayment })
+                }
+            }
+
+            res.send({ success: false })
         })
 
         // Send a ping to confirm a successful connection
