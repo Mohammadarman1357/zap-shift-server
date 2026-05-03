@@ -6,11 +6,18 @@ const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 // payment stripe
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
-
 const port = process.env.PORT || 3000
-
 // generate tracking id
 const crypto = require('crypto');
+
+// firebase 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./zap-shift-firebase-adminsdk-.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 function generateTrackingId() {
     const prefix = "PRCL"; // your brand prefix
@@ -25,6 +32,16 @@ console.log(generateTrackingId());
 // middleware
 app.use(express.json());
 app.use(cors());
+
+const verifyFBToken = (req, res, next) => {
+    console.log('headers in the middleware', req.headers.authorization);
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' });
+    }
+    next();
+}
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@gampi.pfydvdc.mongodb.net/?appName=Gampi`;
 
@@ -221,9 +238,12 @@ async function run() {
         })
 
         // payment history related apis
-        app.get('/payments', async (req, res) => {
+        app.get('/payments', verifyFBToken, async (req, res) => {
             const email = req.query.email;
             const query = {};
+
+            // console.log('headers', req.headers);
+
             if (email) {
                 query.customer_email = email
             }
