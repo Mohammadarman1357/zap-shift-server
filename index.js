@@ -161,7 +161,22 @@ async function run() {
             const sessionId = req.query.session_id;
 
             const session = await stripe.checkout.sessions.retrieve(sessionId);
-            console.log('session retrieve', session)
+
+            // console.log('session retrieve', session)
+
+            const transactionId = session.payment_intent;
+            const query = { transactionId: transactionId };
+
+            const paymentExist = await paymentCollection.findOne(query);
+            console.log(paymentExist);
+
+            if (paymentExist) {
+                return res.send({
+                    message: 'already exists',
+                    transactionId,
+                    trackingId: paymentExist.trackingId
+                })
+            }
 
             const trackingId = generateTrackingId();
 
@@ -185,6 +200,7 @@ async function run() {
                     parcelName: session.metadata.parcelName,
                     transactionId: session.payment_intent,
                     paymentStatus: session.payment_status,
+                    trackingId: trackingId,
                     paidAt: new Date(),
                 }
 
@@ -202,6 +218,19 @@ async function run() {
             }
 
             res.send({ success: false })
+        })
+
+        // payment history related apis
+        app.get('/payments', async (req, res) => {
+            const email = req.query.email;
+            const query = {};
+            if (email) {
+                query.customer_email = email
+            }
+            const cursor = paymentCollection.find(query);
+            const result = await cursor.toArray();
+            res.send(result);
+
         })
 
         // Send a ping to confirm a successful connection
