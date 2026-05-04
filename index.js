@@ -13,10 +13,10 @@ const crypto = require('crypto');
 // firebase 
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./zap-shift-firebase-adminsdk-.json");
+const serviceAccount = require("./zap-shift-firebase-adminsdk.json");
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+    credential: admin.credential.cert(serviceAccount)
 });
 
 function generateTrackingId() {
@@ -33,14 +33,27 @@ console.log(generateTrackingId());
 app.use(express.json());
 app.use(cors());
 
-const verifyFBToken = (req, res, next) => {
-    console.log('headers in the middleware', req.headers.authorization);
+const verifyFBToken = async (req, res, next) => {
+    // console.log('headers in the middleware', req.headers.authorization);
     const token = req.headers.authorization;
 
     if (!token) {
         return res.status(401).send({ message: 'unauthorized access' });
     }
-    next();
+
+    try {
+        const idToken = token.split(' ')[1];    // must white space dite hobe... 
+        const decoded = await admin.auth().verifyIdToken(idToken);     // must add
+        console.log('decoded in the token : ', decoded);
+        req.decoded_email = decoded.email;
+
+        next();
+    }
+    catch (err) {
+        return res.status(401).send({ message: 'unauthorized access' });
+    }
+
+
 }
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@gampi.pfydvdc.mongodb.net/?appName=Gampi`;
@@ -60,8 +73,30 @@ async function run() {
         await client.connect();
 
         const db = client.db('zap_shift_db');   // create database
+        const usersCollection = db.collection('users');
         const parcelsCollection = db.collection('parcels');
         const paymentCollection = db.collection('payments');
+        const ridersCollection = db.collection('riders');
+
+        // users related apis
+        app.post('/users', async (req, res) => {
+            const user = req.body;
+
+            // by default --> user - normal user
+            user.role = 'user';
+            user.createdAt = new Date();
+            const email = user.email;
+
+            const userExists = await usersCollection.findOne({ email });
+
+            if (userExists) {
+                return res.send({ message: 'user exists' });
+            }
+
+            const result = await usersCollection.insertOne(user);
+            res.send(result);
+
+        })
 
         // parcel  api
         // get parcel
@@ -246,11 +281,54 @@ async function run() {
 
             if (email) {
                 query.customer_email = email
+
+                // check email address. onno jon er email access korte dibe na.
+                if (email !== req.decoded_email) {
+                    return res.status(403).send({ message: 'forbidden access' })
+                }
             }
-            const cursor = paymentCollection.find(query);
+            const cursor = paymentCollection.find(query).sort({ paidAt: -1 });
             const result = await cursor.toArray();
             res.send(result);
 
+        })
+
+        // riders related apis
+        app.get('/riders', async (req, res) => {
+            const query = {};
+            if (req.query.status) {
+                query.status = req.query.status;
+            }
+
+            const cursor = ridersCollection.find(query);
+
+            const result = await cursor.toArray(cursor);
+            res.send(result);
+        })
+
+        app.post('/riders', async (req, res) => {
+            const rider = req.body;
+            rider.status = 'pending';
+            rider.createdAt = new Date();
+
+            const result = await ridersCollection.insertOne(rider);
+            res.send(result);
+
+        })
+
+        // update
+        app.patch('/riders/:id', verifyFBToken, async (req, res) => {
+            const status = req.body.status;
+            const id = req.params.id;
+            const query = { _id: new Object(id) };
+            const updatedDoc = {
+                $set: {
+                    status: status
+                }
+            }
+
+            const result = await ridersCollection.updateOne(query, updatedDoc);
+            res.send(result);
         })
 
         // Send a ping to confirm a successful connection
