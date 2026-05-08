@@ -13,7 +13,7 @@ const crypto = require('crypto');
 // firebase 
 const admin = require("firebase-admin");
 
-const serviceAccount = require(process.env.FIREBASE_CREDENTIALS);
+// const serviceAccount = require(process.env.FIREBASE_CREDENTIALS);
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
