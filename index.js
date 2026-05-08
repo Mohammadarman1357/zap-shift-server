@@ -12,8 +12,11 @@ const crypto = require('crypto');
 
 // firebase 
 const admin = require("firebase-admin");
+const { format } = require('path');
 
-// const serviceAccount = require(process.env.FIREBASE_CREDENTIALS);
+// firebase
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
@@ -82,11 +85,22 @@ async function run() {
         // middleware admin before allowing admin activity
         // must be used after verifyFBToken middlware
 
+        // verify admin
         const verifyAdmin = async (req, res, next) => {
             const email = req.decoded_email;
             const query = { email };
             const user = await usersCollection.findOne(query);
             if (!user || user.role !== 'admin') {
+                return res.status(403).send({ message: 'forbidden access' });
+            }
+            next();
+        }
+        // verify rider
+        const verifyRider = async (req, res, next) => {
+            const email = req.decoded_email;
+            const query = { email };
+            const user = await usersCollection.findOne(query);
+            if (!user || user.role !== 'rider') {
                 return res.status(403).send({ message: 'forbidden access' });
             }
             next();
@@ -195,7 +209,7 @@ async function run() {
             const options = { sort: { createAt: -1 } }
 
             const cursor = parcelsCollection.find(query, options);
-            const result = await cursor.toArray(cursor);
+            const result = await cursor.toArray();
             res.send(result);
         })
 
@@ -230,6 +244,27 @@ async function run() {
             const result = await parcelsCollection.findOne(query);
             res.send(result);
 
+        })
+
+        // aggregation pipeline function to get how many parcel has delivered ... for rechart
+        app.get('/parcels/delivery-status/stats', async (req, res) => {
+            const pipeline = [
+                {
+                    $group: {
+                        _id: '$deliveryStatus',
+                        count: { $sum: 1 }
+                    }
+                },
+                {
+                    $project: {
+                        status: '$_id',
+                        count: 1,   // show count
+                        // _id: 0      // hide _id
+                    }
+                }
+            ]
+            const result = await parcelsCollection.aggregate(pipeline).toArray();
+            res.send(result);
         })
 
         // post parcel
@@ -324,7 +359,7 @@ async function run() {
         app.post('/payment-checkout-session', async (req, res) => {
             // parcel info
             const parcelInfo = req.body;
-            const amount = parseInt(paymentInfo.cost) * 100;
+            const amount = parseInt(parcelInfo.cost) * 100;
             const session = await stripe.checkout.sessions.create({
                 line_items: [
                     {
@@ -443,7 +478,7 @@ async function run() {
 
                     logTracking(trackingId, 'parcel_paid');
 
-                    res.send({
+                    return res.send({
                         success: true,
                         modifyParcel: result,
                         trackingId: trackingId,
@@ -453,7 +488,7 @@ async function run() {
                 }
             }
 
-            res.send({ success: false })
+            return res.send({ success: false })
         })
 
         // payment history related apis
@@ -498,9 +533,66 @@ async function run() {
 
             const cursor = ridersCollection.find(query);
 
-            const result = await cursor.toArray(cursor);
+            const result = await cursor.toArray();
             res.send(result);
         })
+
+        // pipeline for stat & rechart
+        // per day koto gulo delivery korce seta deka
+        app.get('/riders/delivery-per-day', async (req, res) => {
+            const email = req.query.email;
+            const pipeline = [
+                // Step 1: filter this rider + delivered parcels
+                {
+                    $match: {
+                        riderEmail: email,
+                        deliveryStatus: 'parcel_delivered'
+                    }
+                },
+                // Step 2: connect with trackings collection
+                {
+                    $lookup: {
+                        from: 'trackings',
+                        localField: 'trackingId',
+                        foreignField: 'trackingId',
+                        as: 'parcel_trackings'
+                    }
+                },
+                // Step 3: array ke single object banano
+                {
+                    $unwind: '$parcel_trackings'
+                },
+                // Step 4: only delivered tracking
+                {
+                    $match: {
+                        'parcel_trackings.status': 'parcel_delivered'
+                    }
+                },
+                // Step 5: convert time stamp to yyyy-mm-dd string
+                {
+                    $addFields: {
+                        deliveryDay: {
+                            $dateToString: {
+                                format: "%Y-%m-%d",
+                                date: "$parcel_trackings.createdAt"
+                            }
+                        }
+                    }
+                },
+                // group by date
+                {
+                    $group: {
+                        _id: "$deliveryDay",
+                        deliveredCount: { $sum: 1 }
+                    }
+                }
+
+            ];
+
+            const result = await parcelsCollection.aggregate(pipeline).toArray();
+            res.send(result);
+        });
+
 
         app.post('/riders', async (req, res) => {
             const rider = req.body;
@@ -559,8 +651,8 @@ async function run() {
         })
 
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();
