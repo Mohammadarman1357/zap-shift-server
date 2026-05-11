@@ -3,10 +3,11 @@ const cors = require('cors');
 const app = express()
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const port = process.env.PORT || 3000
 
 // payment stripe
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
-const port = process.env.PORT || 3000
+
 // generate tracking id
 const crypto = require('crypto');
 
